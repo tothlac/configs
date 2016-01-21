@@ -1,0 +1,59 @@
+#!/usr/bin/env escript
+
+main([File]) ->
+    AbsFile = filename:absname(File),
+    Dir = filename:dirname(File),
+    AbsDir = filename:absname(Dir),
+
+    Defs = [%strong_validation,
+            warn_export_all,
+            warn_export_vars,
+            warn_shadow_vars,
+            warn_obsolete_guard,
+            warn_unused_import,
+            report,
+            {i, AbsDir ++ "/include"},
+            {i, AbsDir ++ "/../include"},
+            {i, AbsDir ++ "/../../include"},
+            {i, AbsDir ++ "/../../../include"}],
+
+    {RebarDir, RebarConfig} = find_rebar_config(AbsDir),
+    file:set_cwd(RebarDir),
+
+    RebarOpts = case file:consult(RebarConfig) of
+        {ok, Terms} ->
+            Includes = [ {i, LibDir} ||
+                         LibDir <- proplists:get_value(lib_dirs, Terms, [])],
+            RebarDepsDir = proplists:get_value(deps_dir, Terms, "deps"),
+            code:add_pathsa(filelib:wildcard(RebarDepsDir ++ "/*/ebin")),
+
+            lists:foreach(
+              fun(SubDir) ->
+                      code:add_pathsa(filelib:wildcard(SubDir ++ "/ebin"))
+              end, proplists:get_value(sub_dirs, Terms, [])),
+
+            proplists:get_value(erl_opts, Terms, []) ++ [{i,"apps"}|Includes];
+        {error, _} ->
+            []
+    end,
+    code:add_patha(filename:absname("ebin")),
+    CompileOpts = Defs ++ RebarOpts ++ [{outdir, AbsDir ++ "/../ebin/"}],
+    io:format("Compiler options: ~p~n", [CompileOpts]),
+    compile:file(AbsFile, CompileOpts);
+main(_) ->
+    io:format("Usage: ~s <file>~n", [escript:script_name()]),
+    halt(1).
+
+find_rebar_config(AbsDir) ->
+    RebarConfig = filename:join(AbsDir, "rebar.config"),
+    case filelib:is_file(RebarConfig) of
+        true ->
+            {AbsDir, RebarConfig};
+        false ->
+            case AbsDir of
+                "/" ->
+                    throw(rebar_config_not_found);
+                _ ->
+                    find_rebar_config(filename:dirname(AbsDir))
+            end
+    end.
